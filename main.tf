@@ -44,15 +44,30 @@ resource "aws_nat_gateway" "private" {
 
 resource "aws_ec2_tag" "tags_public" {
   for_each = merge([
-    for nat in concat(aws_nat_gateway.private.*.network_interface_id, aws_nat_gateway.public.*.network_interface_id) : {
-      for k, v in local.all_tags : "${nat}-${k}" => {
-        resource_id = nat
-        tag_key     = k
-        tag_value   = v
+    for index in range(local.public_nat_count) : {
+      for k, v in local.all_tags : "${index}-${k}" => {
+        index     = index
+        tag_key   = k
+        tag_value = v
       }
     }
   ]...)
-  resource_id = each.value.resource_id
+  resource_id = aws_nat_gateway.public[each.value.index].network_interface_id
+  key         = each.value.tag_key
+  value       = each.value.tag_value
+}
+
+resource "aws_ec2_tag" "tags_private" {
+  for_each = merge([
+    for index in range(local.private_nat_count) : {
+      for k, v in local.all_tags : "${index}-${k}" => {
+        index     = index
+        tag_key   = k
+        tag_value = v
+      }
+    }
+  ]...)
+  resource_id = aws_nat_gateway.private[each.value.index].network_interface_id
   key         = each.value.tag_key
   value       = each.value.tag_value
 }
