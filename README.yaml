@@ -1,4 +1,4 @@
-name: Terraform Transit Gateway Module
+name: Terraform Module AWS NAT Gateway Management
 #logo: logo/logo.jpg
 
 license: "APACHE2"
@@ -8,23 +8,114 @@ copyrights:
     url: "https://cloudops.works"
     year: "2024"
 
-github_repo: cloudopsworks/terraform-module-aws-vpc-setup
+github_repo: cloudopsworks/terraform-module-aws-nat-gateway
 
 description: |-
-  VPC Module for setting up transit gateway with ResourceAccessMananger support.
+  AWS NAT Gateway management module for providing centralized NAT Gateway deployment and configuration. 
+  Supports multi-AZ deployment, automatic subnet allocation, and elastic IP management. 
+  Includes automatic route table management and integration with existing VPC infrastructure.
 
 # Introduction to the project
-#introduction: |-
-#  This is an introduction.
+introduction: |-
+  This Terraform module manages AWS NAT Gateways in a streamlined and automated way. It simplifies the 
+  deployment and configuration of NAT Gateways across multiple Availability Zones, handles Elastic IP 
+  allocation, and manages the necessary route table entries. The module supports both single and 
+  multi-AZ deployments, with built-in high availability options and automatic failure handling.
 
 # How to use this project
-#usage: |-
+usage: |-
+  To use this module, include it in your Terraform configurations with the following structure:
+
+  ```hcl
+  module "nat_gateway" {
+    source = "cloudopsworks/terraform-module-aws-nat-gateway"
+
+    vpc_id         = var.vpc_id
+    public_subnets = var.public_subnet_ids
+
+    # Optional configurations
+    multi_az       = true
+    nat_gateway_count = 2
+    custom_tags    = var.tags
+  }
+  ```
+
+  For Terragrunt implementations, use:
+
+  ```hcl
+  include "root" {
+    path = find_in_parent_folders()
+  }
+
+  terraform {
+    source = "git::https://github.com/cloudopsworks/terraform-module-aws-nat-gateway.git?ref=v1.0.0"
+  }
+
+  inputs = {
+    vpc_id         = dependency.vpc.outputs.vpc_id
+    public_subnets = dependency.vpc.outputs.public_subnet_ids
+    multi_az       = true
+    nat_gateway_count = 2
+  }
+  ```
 
 # Example usage
-#examples: |-
+examples: |-
+  1. Single NAT Gateway deployment:
+
+  ```hcl
+  inputs = {
+    vpc_id         = dependency.vpc.outputs.vpc_id
+    public_subnets = [dependency.vpc.outputs.public_subnet_ids[0]]
+    multi_az       = false
+    nat_gateway_count = 1
+  }
+  ```
+
+  2. High-availability multi-AZ setup:
+
+  ```hcl
+  inputs = {
+    vpc_id         = dependency.vpc.outputs.vpc_id
+    public_subnets = dependency.vpc.outputs.public_subnet_ids
+    multi_az       = true
+    nat_gateway_count = 3
+    custom_tags    = {
+      Environment = "Production"
+      HighAvailability = "true"
+    }
+  }
+  ```
 
 # How to get started quickly
-#quickstart: |-
+quickstart: |-
+  1. Add the module to your Terragrunt configuration:
+
+  ```hcl
+  include "root" {
+    path = find_in_parent_folders()
+  }
+
+  terraform {
+    source = "git::https://github.com/cloudopsworks/terraform-module-aws-nat-gateway.git?ref=v1.0.0"
+  }
+
+  inputs = {
+    vpc_id         = dependency.vpc.outputs.vpc_id
+    public_subnets = dependency.vpc.outputs.public_subnet_ids
+    multi_az       = true
+    nat_gateway_count = 2
+  }
+  ```
+
+  2. Initialize Terragrunt:
+     terragrunt init
+
+  3. Plan the deployment:
+     terragrunt plan
+
+  4. Apply the configuration:
+     terragrunt apply
 
 include:
   - "docs/targets.md"
