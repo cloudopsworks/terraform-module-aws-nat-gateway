@@ -10,6 +10,7 @@
 variable "nat_settings" {
   description = "(optional) Map of settings for the NAT Gateway, defaults to empty map"
   type = object({
+    nat_count                  = optional(number, -1)
     connectivity_type          = optional(string, "public")
     allocation_ids             = optional(list(string), [])
     subnet_ids                 = optional(list(string), [])
