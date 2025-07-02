@@ -7,8 +7,18 @@
 #     Distributed Under Apache v2.0 License
 #
 
+locals {
+  # public nat count is the count of var.nat_settings.allocation_ids, unless var.nat_settings.nat_count > 0
+  public_nat_count = var.nat_settings.connectivity_type == "public" ? (
+    var.nat_settings.nat_count > 0 ? var.nat_settings.nat_count : length(var.nat_settings.allocation_ids)
+  ) : 0
+  private_nat_count = var.nat_settings.connectivity_type == "private" ? (
+    var.nat_settings.nat_count > 0 ? var.nat_settings.nat_count : length(var.nat_settings.subnet_ids)
+  ) : 0
+}
+
 resource "aws_nat_gateway" "public" {
-  count                          = var.nat_settings.connectivity_type == "public" ? max(length(var.nat_settings.allocation_ids), var.nat_settings.nat_count) : 0
+  count                          = local.public_nat_count
   connectivity_type              = var.nat_settings.connectivity_type
   allocation_id                  = var.nat_settings.allocation_ids[count.index]
   private_ip                     = try(var.nat_settings.private_ips[count.index], null)
@@ -21,7 +31,7 @@ resource "aws_nat_gateway" "public" {
 }
 
 resource "aws_nat_gateway" "private" {
-  count                              = var.nat_settings.connectivity_type == "private" ? max(length(var.nat_settings.subnet_ids), var.nat_settings.nat_count) : 0
+  count                              = local.private_nat_count
   connectivity_type                  = var.nat_settings.connectivity_type
   private_ip                         = var.nat_settings.private_ips[count.index]
   subnet_id                          = var.nat_settings.subnet_ids[count.index]
