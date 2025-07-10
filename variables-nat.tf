@@ -12,12 +12,17 @@ variable "nat_settings" {
   type = object({
     nat_count                  = optional(number, -1)
     connectivity_type          = optional(string, "public")
-    allocation_ids             = optional(list(string), [])
+    configurations            = optional(list(object({
+      subnet_id                 = optional(string, null)
+      private_ip                = optional(string, null)
+      allocation_id             = optional(string, null)
+      secondary_allocation_ids  = optional(list(string), null)
+      secondary_private_ips     = optional(list(string), null)
+      secondary_private_ip_count = optional(number, null)
+    })), [])
     subnet_ids                 = optional(list(string), [])
     private_ips                = optional(list(string), [])
-    secondary_allocation_ids   = optional(list(string), null)
-    secondary_private_ips      = optional(list(string), null)
-    secondary_private_ip_count = optional(number, null)
+    allocation_ids             = optional(list(string), [])
   })
   default = {}
 }
