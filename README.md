@@ -16,8 +16,8 @@
 
 
 AWS NAT Gateway management module for providing centralized NAT Gateway deployment and configuration. 
-Supports multi-AZ deployment, automatic subnet allocation, and elastic IP management. 
-Includes automatic route table management and integration with existing VPC infrastructure.
+Supports both public and private NAT Gateways, multi-AZ deployment, custom IP configurations, and elastic IP management.
+Includes automatic network interface tagging and flexible gateway configurations.
 
 
 ---
@@ -52,10 +52,14 @@ We have [*lots of terraform modules*][terraform_modules] that are Open Source an
 
 ## Introduction
 
-This Terraform module manages AWS NAT Gateways in a streamlined and automated way. It simplifies the 
-deployment and configuration of NAT Gateways across multiple Availability Zones, handles Elastic IP 
-allocation, and manages the necessary route table entries. The module supports both single and 
-multi-AZ deployments, with built-in high availability options and automatic failure handling.
+This Terraform module manages AWS NAT Gateways in a streamlined and automated way. It supports both public 
+and private NAT Gateway deployments with flexible configuration options. Key features include:
+- Public NAT Gateway with Elastic IP support
+- Private NAT Gateway with custom IP configurations
+- Secondary IP address management
+- Automatic network interface tagging
+- Multi-AZ deployment support
+- Hub and spoke architecture compatibility
 
 ## Usage
 
@@ -70,13 +74,19 @@ To use this module, include it in your Terraform configurations with the followi
 module "nat_gateway" {
   source = "cloudopsworks/terraform-module-aws-nat-gateway"
 
-  vpc_id         = var.vpc_id
-  public_subnets = var.public_subnet_ids
+  nat_settings = {
+    nat_count = 2
+    connectivity_type = "public"  # or "private"
+    subnet_ids = ["subnet-1", "subnet-2"]
+    allocation_ids = ["eip-1", "eip-2"]  # Required for public NAT
+  }
 
-  # Optional configurations
-  multi_az       = true
-  nat_gateway_count = 2
-  custom_tags    = var.tags
+  org = {
+    organization_name = "myorg"
+    organization_unit = "myunit"
+    environment_type = "prod"
+    environment_name = "production"
+  }
 }
 ```
 
@@ -92,10 +102,19 @@ terraform {
 }
 
 inputs = {
-  vpc_id         = dependency.vpc.outputs.vpc_id
-  public_subnets = dependency.vpc.outputs.public_subnet_ids
-  multi_az       = true
-  nat_gateway_count = 2
+  nat_settings = {
+    nat_count = 2
+    connectivity_type = "public"
+    subnet_ids = dependency.vpc.outputs.public_subnet_ids
+    allocation_ids = dependency.eip.outputs.allocation_ids
+  }
+
+  org = {
+    organization_name = "myorg"
+    organization_unit = "myunit"
+    environment_type = "prod"
+    environment_name = "production"
+  }
 }
 ```
 
@@ -113,10 +132,22 @@ terraform {
 }
 
 inputs = {
-  vpc_id         = dependency.vpc.outputs.vpc_id
-  public_subnets = dependency.vpc.outputs.public_subnet_ids
-  multi_az       = true
-  nat_gateway_count = 2
+  nat_settings = {
+    nat_count = 2
+    connectivity_type = "public"
+    subnet_ids = dependency.vpc.outputs.public_subnet_ids
+    allocation_ids = dependency.eip.outputs.allocation_ids
+  }
+
+  org = {
+    organization_name = "myorg"
+    organization_unit = "myunit"
+    environment_type = "prod"
+    environment_name = "production"
+  }
+
+  is_hub = false
+  spoke_def = "001"
 }
 ```
 
@@ -132,28 +163,55 @@ inputs = {
 
 ## Examples
 
-1. Single NAT Gateway deployment:
+1. Single Public NAT Gateway:
 
 ```hcl
 inputs = {
-  vpc_id         = dependency.vpc.outputs.vpc_id
-  public_subnets = [dependency.vpc.outputs.public_subnet_ids[0]]
-  multi_az       = false
-  nat_gateway_count = 1
+  nat_settings = {
+    nat_count = 1
+    connectivity_type = "public"
+    subnet_ids = [dependency.vpc.outputs.public_subnet_ids[0]]
+    allocation_ids = [dependency.eip.outputs.allocation_id]
+  }
 }
 ```
 
-2. High-availability multi-AZ setup:
+2. Multi-AZ Public NAT Gateway Setup:
 
 ```hcl
 inputs = {
-  vpc_id         = dependency.vpc.outputs.vpc_id
-  public_subnets = dependency.vpc.outputs.public_subnet_ids
-  multi_az       = true
-  nat_gateway_count = 3
-  custom_tags    = {
-    Environment = "Production"
-    HighAvailability = "true"
+  nat_settings = {
+    nat_count = 2
+    connectivity_type = "public"
+    configurations = [
+      {
+        subnet_id = dependency.vpc.outputs.public_subnet_ids[0]
+        allocation_id = dependency.eip.outputs.allocation_ids[0]
+        secondary_allocation_ids = [dependency.eip.outputs.secondary_ids[0]]
+      },
+      {
+        subnet_id = dependency.vpc.outputs.public_subnet_ids[1]
+        allocation_id = dependency.eip.outputs.allocation_ids[1]
+      }
+    ]
+  }
+}
+```
+
+3. Private NAT Gateway with Custom IPs:
+
+```hcl
+inputs = {
+  nat_settings = {
+    nat_count = 1
+    connectivity_type = "private"
+    configurations = [
+      {
+        subnet_id = dependency.vpc.outputs.private_subnet_ids[0]
+        private_ip = "10.0.1.100"
+        secondary_private_ips = ["10.0.1.101", "10.0.1.102"]
+      }
+    ]
   }
 }
 ```
@@ -206,7 +264,7 @@ Available targets:
 |------|-------------|------|---------|:--------:|
 | <a name="input_extra_tags"></a> [extra\_tags](#input\_extra\_tags) | Extra tags to add to the resources | `map(string)` | `{}` | no |
 | <a name="input_is_hub"></a> [is\_hub](#input\_is\_hub) | Is this a hub or spoke configuration? | `bool` | `false` | no |
-| <a name="input_nat_settings"></a> [nat\_settings](#input\_nat\_settings) | (optional) Map of settings for the NAT Gateway, defaults to empty map | <pre>object({<br/>    nat_count                  = optional(number, -1)<br/>    connectivity_type          = optional(string, "public")<br/>    allocation_ids             = optional(list(string), [])<br/>    subnet_ids                 = optional(list(string), [])<br/>    private_ips                = optional(list(string), [])<br/>    secondary_allocation_ids   = optional(list(string), null)<br/>    secondary_private_ips      = optional(list(string), null)<br/>    secondary_private_ip_count = optional(number, null)<br/>  })</pre> | `{}` | no |
+| <a name="input_nat_settings"></a> [nat\_settings](#input\_nat\_settings) | (optional) Map of settings for the NAT Gateway, defaults to empty map | <pre>object({<br/>    nat_count         = optional(number, -1)<br/>    connectivity_type = optional(string, "public")<br/>    configurations = optional(list(object({<br/>      subnet_id                  = optional(string, null)<br/>      private_ip                 = optional(string, null)<br/>      allocation_id              = optional(string, null)<br/>      secondary_allocation_ids   = optional(list(string), null)<br/>      secondary_private_ips      = optional(list(string), null)<br/>      secondary_private_ip_count = optional(number, null)<br/>    })), [])<br/>    subnet_ids     = optional(list(string), [])<br/>    private_ips    = optional(list(string), [])<br/>    allocation_ids = optional(list(string), [])<br/>  })</pre> | `{}` | no |
 | <a name="input_org"></a> [org](#input\_org) | Organization details | <pre>object({<br/>    organization_name = string<br/>    organization_unit = string<br/>    environment_type  = string<br/>    environment_name  = string<br/>  })</pre> | n/a | yes |
 | <a name="input_spoke_def"></a> [spoke\_def](#input\_spoke\_def) | Spoke ID Number, must be a 3 digit number | `string` | `"001"` | no |
 
