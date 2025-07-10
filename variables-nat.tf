@@ -13,6 +13,7 @@ variable "nat_settings" {
     nat_count         = optional(number, -1)
     connectivity_type = optional(string, "public")
     configurations = optional(list(object({
+      name_prefix                = optional(string, "nat")
       subnet_id                  = optional(string, null)
       private_ip                 = optional(string, null)
       allocation_id              = optional(string, null)

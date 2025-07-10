@@ -26,7 +26,7 @@ resource "aws_nat_gateway" "public" {
   secondary_allocation_ids       = try(var.nat_settings.configurations[count.index].secondary_allocation_ids, null)
   secondary_private_ip_addresses = try(var.nat_settings.configurations[count.index].secondary_private_ips, null)
   tags = merge({
-    Name = try("nat-${var.nat_settings.configurations[count.index].name_prefix}-${local.system_name}-public", "nat-${local.system_name}-public-${count.index}")
+    Name = "${try(var.nat_settings.configurations[count.index].name_prefix, "nat")}-${local.system_name}-public"
   }, local.all_tags)
 }
 
@@ -38,7 +38,7 @@ resource "aws_nat_gateway" "private" {
   secondary_private_ip_address_count = try(var.nat_settings.configurations[count.index].secondary_private_ip_count, null)
   secondary_private_ip_addresses     = try(var.nat_settings.configurations[count.index].secondary_private_ips, null)
   tags = merge({
-    Name = try("nat-${var.nat_settings.configurations[count.index].name_prefix}-${local.system_name}-private", "nat-${local.system_name}-private-${count.index}")
+    Name = "${try(var.nat_settings.configurations[count.index].name_prefix, "nat")}-${local.system_name}-private"
   }, local.all_tags)
 }
 
