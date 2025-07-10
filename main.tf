@@ -20,9 +20,9 @@ locals {
 resource "aws_nat_gateway" "public" {
   count                          = local.public_nat_count
   connectivity_type              = var.nat_settings.connectivity_type
-  allocation_id                  = try(var.nat_settings.configurations[count.index].allocation_id, var.nat_settings.allocation_ids[count.index])
-  private_ip                     = try(var.nat_settings.configurations[count.index].private_ip, var.nat_settings.private_ips[count.index], null)
-  subnet_id                      = try(var.nat_settings.configurations[count.index].subnet_id, var.nat_settings.subnet_ids[count.index])
+  allocation_id                  = try(var.nat_settings.allocation_ids[count.index], var.nat_settings.configurations[count.index].allocation_id)
+  private_ip                     = try(var.nat_settings.private_ips[count.index], var.nat_settings.configurations[count.index].private_ip)
+  subnet_id                      = try(var.nat_settings.subnet_ids[count.index], var.nat_settings.configurations[count.index].subnet_id)
   secondary_allocation_ids       = try(var.nat_settings.configurations[count.index].secondary_allocation_ids, null)
   secondary_private_ip_addresses = try(var.nat_settings.configurations[count.index].secondary_private_ips, null)
   tags = merge({
@@ -33,8 +33,8 @@ resource "aws_nat_gateway" "public" {
 resource "aws_nat_gateway" "private" {
   count                              = local.private_nat_count
   connectivity_type                  = var.nat_settings.connectivity_type
-  private_ip                         = try(var.nat_settings.configurations[count.index].private_ip, var.nat_settings.private_ips[count.index], null)
-  subnet_id                          = try(var.nat_settings.configurations[count.index].subnet_id, var.nat_settings.subnet_ids[count.index])
+  private_ip                         = try(var.nat_settings.private_ips[count.index], var.nat_settings.configurations[count.index].private_ip)
+  subnet_id                          = try(var.nat_settings.subnet_ids[count.index], var.nat_settings.configurations[count.index].subnet_id)
   secondary_private_ip_address_count = try(var.nat_settings.configurations[count.index].secondary_private_ip_count, null)
   secondary_private_ip_addresses     = try(var.nat_settings.configurations[count.index].secondary_private_ips, null)
   tags = merge({
