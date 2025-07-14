@@ -14,6 +14,7 @@ output "nat_gateway_public" {
       allocation_id = nat.allocation_id
       subnet_id     = nat.subnet_id
       private_ip    = nat.private_ip
+      name          = nat.tags["Name"]
     }
   }
 }
@@ -24,6 +25,7 @@ output "nat_gateway_private" {
       id         = nat.id
       subnet_id  = nat.subnet_id
       private_ip = nat.private_ip
+      name       = nat.tags["Name"]
     }
   }
 }
