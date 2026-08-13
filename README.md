@@ -12,12 +12,13 @@
 
 # Terraform Module AWS NAT Gateway Management
 
+ [![Latest Release](https://img.shields.io/github/release/cloudopsworks/terraform-module-aws-nat-gateway.svg?style=for-the-badge)](https://github.com/cloudopsworks/terraform-module-aws-nat-gateway/releases/latest) [![Last Updated](https://img.shields.io/github/last-commit/cloudopsworks/terraform-module-aws-nat-gateway.svg?style=for-the-badge)](https://github.com/cloudopsworks/terraform-module-aws-nat-gateway/commits)
 
 
-
-AWS NAT Gateway management module for providing centralized NAT Gateway deployment and configuration. 
-Supports both public and private NAT Gateways, multi-AZ deployment, custom IP configurations, and elastic IP management.
-Includes automatic network interface tagging and flexible gateway configurations.
+AWS NAT Gateway management module providing centralized NAT Gateway deployment and configuration.
+Supports public and private NAT Gateways, multi-AZ deployment, primary and secondary IP configurations,
+and Elastic IP association. Every gateway and its underlying network interface is tagged with the
+organization tag set, so NAT traffic can be attributed per environment, spoke and region.
 
 
 ---
@@ -47,14 +48,57 @@ We have [*lots of terraform modules*][terraform_modules] that are Open Source an
 
 ## Introduction
 
-This Terraform module manages AWS NAT Gateways in a streamlined and automated way. It supports both public 
-and private NAT Gateway deployments with flexible configuration options. Key features include:
-- Public NAT Gateway with Elastic IP support
-- Private NAT Gateway with custom IP configurations
-- Secondary IP address management
-- Automatic network interface tagging
-- Multi-AZ deployment support
-- Hub and spoke architecture compatibility
+This Terraform module manages AWS NAT Gateways in a streamlined and automated way. A single
+`nat_settings` object drives the whole deployment: it decides how many gateways are created, whether
+they are public or private, where they are placed, and which addresses they carry.
+
+Key features:
+
+- **Public NAT Gateways** — internet egress with one Elastic IP allocation per gateway, plus optional
+  secondary allocations for high-throughput or IP-pinning scenarios.
+- **Private NAT Gateways** — VPC-to-VPC and on-premises egress with no Elastic IP, supporting explicit
+  secondary private addresses or an automatically allocated count.
+- **Multi-AZ deployment** — gateways are created from index-aligned lists, so one gateway per
+  availability zone is a matter of passing the matching subnet and allocation lists.
+- **Two configuration styles** — simple parallel lists (`subnet_ids`, `allocation_ids`, `private_ips`)
+  for homogeneous deployments, or the `configurations` list when each gateway needs its own name and
+  secondary addressing. Lists take precedence over the equivalent `configurations` entry.
+- **Network interface tagging** — the ENI behind each gateway receives the same tag set as the gateway
+  itself through `aws_ec2_tag`, which AWS does not propagate on its own.
+- **Hub and spoke architecture compatibility** — naming and tagging derive from the organization,
+  environment, spoke and region conventions shared across CloudOps Works modules.
+
+## How the gateway count is resolved
+
+| `connectivity_type` | `nat_count` > 0            | `nat_count` <= 0 (default `-1`)          |
+|---------------------|----------------------------|------------------------------------------|
+| `public`            | exactly `nat_count`        | `length(allocation_ids)`                 |
+| `private`           | exactly `nat_count`        | `length(subnet_ids)`                     |
+
+When `nat_count` is greater than zero it wins over the list lengths, so every list that the deployment
+supplies must hold at least that many entries.
+
+## Naming and tagging
+
+Gateways are named `<name_prefix>-<organization_unit>-<environment_name>-<environment_type>-<spoke>-<region>-<connectivity_type>`,
+with `name_prefix` defaulting to `nat` and `<region>` compressed to the CloudOps Works short form
+(`us-east-1` becomes `usea1`). A public gateway in the `devops` unit of the `prod` / `production`
+environment, spoke `001`, region `us-east-1` therefore ends up as:
+
+```text
+nat-devops-prod-production-001-usea1-public
+```
+
+The same tag set — the organization common tags merged with `extra_tags` — is applied twice: once on the
+gateway itself, and once on the gateway's elastic network interface through `aws_ec2_tag`. AWS does not
+propagate gateway tags to that ENI, so without the second pass the interface would show up untagged in
+flow logs, cost allocation and security tooling.
+
+## Index alignment
+
+`subnet_ids`, `allocation_ids`, `private_ips` and `configurations` are index aligned — entry `0` of each
+list describes the same gateway. The gateways are `count`-based resources, so inserting or reordering an
+entry re-creates every gateway from that index onwards. Append new entries at the end of the lists.
 
 ## Usage
 
@@ -63,33 +107,119 @@ and private NAT Gateway deployments with flexible configuration options. Key fea
 Instead pin to the release tag (e.g. `?ref=vX.Y.Z`) of one of our [latest releases](https://github.com/cloudopsworks/terraform-module-aws-nat-gateway/releases).
 
 
-To use this module, include it in your Terraform configurations with the following structure:
+This module is consumed through Terragrunt. Bootstrap a new deployment with the built-in scaffold
+command, which sources `.boilerplate/boilerplate.yml` and writes `terragrunt.hcl`, `inputs.yaml` and
+`local-tags.json` into the current directory.
 
-```hcl
-module "nat_gateway" {
-  source = "cloudopsworks/terraform-module-aws-nat-gateway"
+```sh
+# 1. Create and enter the target deployment directory
+mkdir -p <environment>/<region>/<spoke>/nat-gateway
+cd <environment>/<region>/<spoke>/nat-gateway
 
-  nat_settings = {
-    nat_count = 2
-    connectivity_type = "public"  # or "private"
-    subnet_ids = ["subnet-1", "subnet-2"]
-    allocation_ids = ["eip-1", "eip-2"]  # Required for public NAT
-  }
+# 2. Scaffold the module (do NOT use --working-dir)
+terragrunt scaffold github.com/cloudopsworks/terraform-module-aws-nat-gateway
 
-  org = {
-    organization_name = "myorg"
-    organization_unit = "myunit"
-    environment_type = "prod"
-    environment_name = "production"
-  }
-}
+# 3. Edit inputs.yaml with deployment-specific values
+#    (all keys and comments are pre-populated from .boilerplate/inputs.yaml)
+vi inputs.yaml
+
+# 4. Apply
+terragrunt apply
 ```
 
-For Terragrunt implementations, use:
+Scaffold prompts for the following answers:
+
+| Prompt                   | Type   | Default    | Purpose                                                                      |
+|--------------------------|--------|------------|------------------------------------------------------------------------------|
+| `is_hub`                 | bool   | `false`    | Marks the deployment as the hub of a hub and spoke topology.                  |
+| `tags`                   | map    | `{}`       | Deployment level tags written to `local-tags.json`.                           |
+| `vpc_dependency_enabled` | bool   | `true`     | Wires a Terragrunt `dependency "vpc"` and injects its subnets automatically.   |
+| `vpc_dependency_path`    | string | `../vpc`   | Relative path to the VPC deployment directory.                                |
+| `vpc_subnet_type`        | enum   | `private`  | Which VPC subnet output feeds `subnet_ids`: `private`, `intra` or `database`. |
+
+> **Public gateways need public subnets.** `vpc_subnet_type` defaults to `private`, which matches
+> `connectivity_type: "private"` only. A public NAT Gateway placed in a private subnet applies without
+> error but never reaches the internet, because the subnet has no route to an Internet Gateway. For a
+> public deployment, point the dependency at the VPC public subnet output, or answer
+> `vpc_dependency_enabled` with `false` and set `subnet_ids` explicitly in `inputs.yaml`.
+
+## Generated `inputs.yaml`
+
+The scaffold copies `.boilerplate/inputs.yaml`, where every key is present and commented. Below it is
+shown filled in for a three-gateway public deployment — `nat_settings` may also be named `settings`, and
+`settings` wins when both are present:
+
+```yaml
+# Module configuration
+nat_settings: # (Optional) NAT Gateway settings. Default: {} — no NAT Gateway is created.
+  nat_count: 3 # (Optional) Number of NAT Gateways to create. Default: -1
+  #              When <= 0 the count is derived from the length of allocation_ids
+  #              (connectivity_type "public") or subnet_ids (connectivity_type "private").
+  #              When > 0 it must not exceed the length of those lists.
+  connectivity_type: "public" # (Optional) Values: "public" | "private". Default: "public"
+  #                             "public"  -> internet egress, requires one Elastic IP allocation per gateway.
+  #                             "private" -> VPC-to-VPC / on-premises egress, no Elastic IP is used.
+  allocation_ids: # (Optional) Elastic IP allocation IDs, one per NAT Gateway, indexed in order. Default: []
+    - "eipalloc-0123456789abcdef0"
+    - "eipalloc-0123456789abcdef1"
+    - "eipalloc-0123456789abcdef2"
+  # subnet_ids: [] # (Optional) Subnet IDs, one per NAT Gateway, indexed in order. Default: []
+  #                #            Leave unset when the VPC dependency is enabled — the generated
+  #                #            terragrunt.hcl overrides it with the VPC module subnets.
+  #                #            Public gateways require public subnets.
+  # private_ips: [] # (Optional) Primary private IPv4 address, one per NAT Gateway. Default: []
+  # configurations: [] # (Optional) Per-gateway configuration, indexed as the lists above. Default: []
+  #   - name_prefix: "nat"                          # (Optional) Name tag prefix. Default: "nat"
+  #     subnet_id: "subnet-0123456789abcdef0"       # (Optional) Default: null
+  #     allocation_id: "eipalloc-0123456789abcdef0" # (Optional) Public gateways only. Default: null
+  #     private_ip: "10.0.1.100"                    # (Optional) Default: null
+  #     secondary_allocation_ids: []                # (Optional) Public gateways only. Default: null
+  #     secondary_private_ips: []                   # (Optional) Conflicts with secondary_private_ip_count. Default: null
+  #     secondary_private_ip_count: 2               # (Optional) Private gateways only. Default: null
+```
+
+## Generated `terragrunt.hcl`
+
+The scaffold renders the file below — `inputs.yaml` is loaded as `local.local_vars` and mapped into the
+module inputs, while the organization, spoke and tag values come from the parent hierarchy.
 
 ```hcl
+locals {
+  local_vars  = yamldecode(file("./inputs.yaml"))
+  spoke_vars  = yamldecode(file(find_in_parent_folders("spoke-inputs.yaml")))
+  region_vars = yamldecode(file(find_in_parent_folders("region-inputs.yaml")))
+  env_vars    = yamldecode(file(find_in_parent_folders("env-inputs.yaml")))
+  global_vars = yamldecode(file(find_in_parent_folders("global-inputs.yaml")))
+
+  local_tags  = jsondecode(file("./local-tags.json"))
+  spoke_tags  = jsondecode(file(find_in_parent_folders("spoke-tags.json")))
+  region_tags = jsondecode(file(find_in_parent_folders("region-tags.json")))
+  env_tags    = jsondecode(file(find_in_parent_folders("env-tags.json")))
+  global_tags = jsondecode(file(find_in_parent_folders("global-tags.json")))
+
+  tags = merge(
+    local.global_tags,
+    local.env_tags,
+    local.region_tags,
+    local.spoke_tags,
+    local.local_tags
+  )
+}
+
 include "root" {
-  path = find_in_parent_folders()
+  path = find_in_parent_folders("root.hcl")
+}
+
+dependency "vpc" {
+  config_path = "../vpc"
+  mock_outputs_allowed_terraform_commands = ["validate", "destroy"]
+  mock_outputs = {
+    database_subnets = ["subnet-abcdef123456789", "subnet-abcdef123456781", "subnet-abcdef123456782"]
+    private_subnets  = ["subnet-01234567890123456", "subnet-01234567890123457", "subnet-01234567890123458"]
+    intra_subnets    = ["subnet-01234567890123456", "subnet-01234567890123457", "subnet-01234567890123458"]
+    vpc_id           = "vpc-12345678901234"
+    vpc_cidr_block   = "1.0.0.0/8"
+  }
 }
 
 terraform {
@@ -97,119 +227,208 @@ terraform {
 }
 
 inputs = {
-  nat_settings = {
-    nat_count = 2
-    connectivity_type = "public"
-    subnet_ids = dependency.vpc.outputs.public_subnet_ids
-    allocation_ids = dependency.eip.outputs.allocation_ids
-  }
+  is_hub    = false
+  org       = local.env_vars.org
+  spoke_def = local.spoke_vars.spoke
 
-  org = {
-    organization_name = "myorg"
-    organization_unit = "myunit"
-    environment_type = "prod"
-    environment_name = "production"
-  }
+  nat_settings = merge(try(local.local_vars.settings, local.local_vars.nat_settings), {
+    subnet_ids = dependency.vpc.outputs.private_subnets
+  })
+
+  extra_tags = local.tags
 }
 ```
+
+When the VPC dependency is disabled at scaffold time, the `dependency "vpc"` block is omitted and
+`nat_settings` is mapped straight from `inputs.yaml`, so `subnet_ids` must be provided there.
 
 ## Quick Start
 
-1. Add the module to your Terragrunt configuration:
+1. Make sure the VPC deployment exists and exports the subnet list this module will use, and that the
+   Elastic IPs are allocated when deploying public gateways.
 
-```hcl
-include "root" {
-  path = find_in_parent_folders()
-}
+2. Scaffold the deployment directory:
 
-terraform {
-  source = "git::https://github.com/cloudopsworks/terraform-module-aws-nat-gateway.git?ref=v1.0.0"
-}
+   ```sh
+   mkdir -p prod/us-east-1/001/nat-gateway
+   cd prod/us-east-1/001/nat-gateway
+   terragrunt scaffold github.com/cloudopsworks/terraform-module-aws-nat-gateway
+   ```
 
-inputs = {
-  nat_settings = {
-    nat_count = 2
-    connectivity_type = "public"
-    subnet_ids = dependency.vpc.outputs.public_subnet_ids
-    allocation_ids = dependency.eip.outputs.allocation_ids
-  }
+   Answer the prompts. Accepting the defaults wires the VPC dependency at `../vpc` and feeds the
+   **private** subnets into `subnet_ids`, which is what a private gateway wants. The public deployment
+   below needs public subnets instead, so either point `vpc_subnet_type` at the VPC public subnet output
+   or answer `vpc_dependency_enabled` with `false` and list `subnet_ids` yourself.
 
-  org = {
-    organization_name = "myorg"
-    organization_unit = "myunit"
-    environment_type = "prod"
-    environment_name = "production"
-  }
+3. Fill in `inputs.yaml`:
 
-  is_hub = false
-  spoke_def = "001"
-}
-```
+   ```yaml
+   nat_settings:
+     nat_count: 3
+     connectivity_type: "public"
+     allocation_ids:
+       - "eipalloc-0123456789abcdef0"
+       - "eipalloc-0123456789abcdef1"
+       - "eipalloc-0123456789abcdef2"
+   ```
 
-2. Initialize Terragrunt:
+4. Review and apply:
+
+   ```sh
    terragrunt init
-
-3. Plan the deployment:
    terragrunt plan
-
-4. Apply the configuration:
    terragrunt apply
+   ```
+
+5. Point the private route tables at the new gateways using the `nat_gateway_ids` output, keeping the
+   index alignment — `nat_gateway_ids[0]` is the gateway built from the first subnet in the list, so an
+   availability zone routes to the gateway that shares its index.
 
 
 ## Examples
 
-1. Single Public NAT Gateway:
+All examples below are the `nat_settings` block of `inputs.yaml`.
+
+### 1. One public NAT Gateway per availability zone
+
+Three Elastic IPs, three subnets taken from the VPC dependency — which must be pointed at the VPC public
+subnet output for a public gateway. `nat_count` is omitted, so the count comes from `allocation_ids`.
+
+```yaml
+nat_settings:
+  connectivity_type: "public"
+  allocation_ids:
+    - "eipalloc-0123456789abcdef0"
+    - "eipalloc-0123456789abcdef1"
+    - "eipalloc-0123456789abcdef2"
+```
+
+### 2. Single public NAT Gateway with explicit placement
+
+Useful for non-production environments where one gateway is enough. `subnet_ids` is set explicitly,
+which requires the VPC dependency to be disabled at scaffold time.
+
+```yaml
+nat_settings:
+  nat_count: 1
+  connectivity_type: "public"
+  subnet_ids:
+    - "subnet-0123456789abcdef0"
+  allocation_ids:
+    - "eipalloc-0123456789abcdef0"
+```
+
+### 3. Public NAT Gateways with distinct names and secondary Elastic IPs
+
+The `configurations` list gives each gateway its own Name tag prefix and extra allocations to widen
+the available source port range.
+
+```yaml
+nat_settings:
+  nat_count: 2
+  connectivity_type: "public"
+  configurations:
+    - name_prefix: "nat-egress-a"
+      subnet_id: "subnet-0123456789abcdef0"
+      allocation_id: "eipalloc-0123456789abcdef0"
+      secondary_allocation_ids:
+        - "eipalloc-0123456789abcdefa"
+        - "eipalloc-0123456789abcdefb"
+    - name_prefix: "nat-egress-b"
+      subnet_id: "subnet-0123456789abcdef1"
+      allocation_id: "eipalloc-0123456789abcdef1"
+```
+
+### 4. Private NAT Gateway with fixed addresses
+
+No Elastic IP is involved. The primary address is pinned so on-premises firewall rules stay stable,
+and two secondary addresses are reserved.
+
+```yaml
+nat_settings:
+  nat_count: 1
+  connectivity_type: "private"
+  configurations:
+    - name_prefix: "nat-onprem"
+      subnet_id: "subnet-0123456789abcdef0"
+      private_ip: "10.0.1.100"
+      secondary_private_ips:
+        - "10.0.1.101"
+        - "10.0.1.102"
+```
+
+### 5. Private NAT Gateways with auto-allocated secondary addresses
+
+`secondary_private_ip_count` lets AWS pick the addresses, which avoids managing them by hand when
+scaling connection capacity.
+
+```yaml
+nat_settings:
+  nat_count: 2
+  connectivity_type: "private"
+  configurations:
+    - subnet_id: "subnet-0123456789abcdef0"
+      secondary_private_ip_count: 4
+    - subnet_id: "subnet-0123456789abcdef1"
+      secondary_private_ip_count: 4
+```
+
+### Consuming the outputs
+
+| Output                              | Shape                     | Notes                                                                                   |
+|-------------------------------------|---------------------------|-----------------------------------------------------------------------------------------|
+| `nat_gateway_ids`                   | `list(string)`            | Every gateway of either type, in creation order. The list to feed route tables.           |
+| `nat_gateway_public_ips`            | `list(string)`            | Elastic IPs of the public gateways. Empty for `connectivity_type: "private"`.             |
+| `nat_gateway_private_ips`           | `list(string)`            | Primary private address of every gateway, both types.                                     |
+| `nat_gateway_network_interface_ids` | `list(string)`            | ENI of every gateway, for flow log and security tooling lookups.                          |
+| `nat_gateway_public`                | `map(object)` or `null`   | Keyed by gateway ID. **`null`** unless `connectivity_type` is `"public"`.                 |
+| `nat_gateway_private`               | `map(object)` or `null`   | Keyed by gateway ID. **`null`** unless `connectivity_type` is `"private"`.                |
+
+The two map outputs carry `id`, `subnet_id`, `private_ip`, `network_interface_id` and `name` per entry,
+plus `allocation_id` on `nat_gateway_public`. They are `null` — not an empty map — for the connectivity
+type that was not deployed, so a consumer that may be pointed at either kind must guard the lookup:
 
 ```hcl
-inputs = {
-  nat_settings = {
-    nat_count = 1
-    connectivity_type = "public"
-    subnet_ids = [dependency.vpc.outputs.public_subnet_ids[0]]
-    allocation_ids = [dependency.eip.outputs.allocation_id]
-  }
+locals {
+  gateways = coalesce(
+    dependency.nat.outputs.nat_gateway_public,
+    dependency.nat.outputs.nat_gateway_private,
+    {},
+  )
 }
 ```
 
-2. Multi-AZ Public NAT Gateway Setup:
+Route tables and other downstream deployments reference the gateways through a Terragrunt dependency.
+The list outputs are index aligned with the `nat_settings` lists, so `nat_gateway_ids[0]` is the gateway
+built from `subnet_ids[0]`:
 
 ```hcl
+dependency "nat" {
+  config_path = "../nat-gateway"
+}
+
 inputs = {
-  nat_settings = {
-    nat_count = 2
-    connectivity_type = "public"
-    configurations = [
-      {
-        subnet_id = dependency.vpc.outputs.public_subnet_ids[0]
-        allocation_id = dependency.eip.outputs.allocation_ids[0]
-        secondary_allocation_ids = [dependency.eip.outputs.secondary_ids[0]]
-      },
-      {
-        subnet_id = dependency.vpc.outputs.public_subnet_ids[1]
-        allocation_id = dependency.eip.outputs.allocation_ids[1]
-      }
-    ]
-  }
+  nat_gateway_ids = dependency.nat.outputs.nat_gateway_ids
+  egress_ips      = dependency.nat.outputs.nat_gateway_public_ips
 }
 ```
 
-3. Private NAT Gateway with Custom IPs:
+### Operational notes
 
-```hcl
-inputs = {
-  nat_settings = {
-    nat_count = 1
-    connectivity_type = "private"
-    configurations = [
-      {
-        subnet_id = dependency.vpc.outputs.private_subnet_ids[0]
-        private_ip = "10.0.1.100"
-        secondary_private_ips = ["10.0.1.101", "10.0.1.102"]
-      }
-    ]
-  }
-}
-```
+- **Switching `connectivity_type` is destructive.** Public and private gateways are backed by separate
+  resources, so flipping the value destroys every existing gateway and creates a replacement set. Plan
+  the egress cutover before applying.
+- **List order is part of the state.** Gateways are `count`-based. Removing or reordering an entry in
+  `subnet_ids`, `allocation_ids`, `private_ips` or `configurations` shifts the indices and re-creates
+  every gateway from that point on. Append rather than insert.
+- **`nat_count` must not exceed the lists.** When it is greater than zero it overrides the derived count,
+  and a gateway whose index has neither a list entry nor a `configurations` entry fails at plan time.
+- **Elastic IPs are not managed here.** Allocate them in a separate deployment and pass the allocation
+  IDs in; destroying this module releases the association but leaves the allocations intact.
+- **Secondary addressing is type specific.** `secondary_allocation_ids` applies to public gateways only,
+  `secondary_private_ip_count` to private gateways only, and it conflicts with `secondary_private_ips`.
+- **ENI tags are a second resource.** Each gateway's tag set is re-applied to its network interface with
+  `aws_ec2_tag`, so a tag change produces plan entries for both the gateway and its ENI.
 
 
 
@@ -230,19 +449,19 @@ Available targets:
 | Name | Version |
 |------|---------|
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.4 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.35 |
 
 ## Providers
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.4 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.59.0 |
 
 ## Modules
 
 | Name | Source | Version |
 |------|--------|---------|
-| <a name="module_tags"></a> [tags](#module\_tags) | cloudopsworks/tags/local | 1.0.9 |
+| <a name="module_tags"></a> [tags](#module\_tags) | cloudopsworks/tags/local | 1.0.10 |
 
 ## Resources
 
@@ -260,7 +479,7 @@ Available targets:
 |------|-------------|------|---------|:--------:|
 | <a name="input_extra_tags"></a> [extra\_tags](#input\_extra\_tags) | Extra tags to add to the resources | `map(string)` | `{}` | no |
 | <a name="input_is_hub"></a> [is\_hub](#input\_is\_hub) | Is this a hub or spoke configuration? | `bool` | `false` | no |
-| <a name="input_nat_settings"></a> [nat\_settings](#input\_nat\_settings) | (optional) Map of settings for the NAT Gateway, defaults to empty map | <pre>object({<br/>    nat_count         = optional(number, -1)<br/>    connectivity_type = optional(string, "public")<br/>    configurations = optional(list(object({<br/>      name_prefix                = optional(string, "nat")<br/>      subnet_id                  = optional(string, null)<br/>      private_ip                 = optional(string, null)<br/>      allocation_id              = optional(string, null)<br/>      secondary_allocation_ids   = optional(list(string), null)<br/>      secondary_private_ips      = optional(list(string), null)<br/>      secondary_private_ip_count = optional(number, null)<br/>    })), [])<br/>    subnet_ids     = optional(list(string), [])<br/>    private_ips    = optional(list(string), [])<br/>    allocation_ids = optional(list(string), [])<br/>  })</pre> | `{}` | no |
+| <a name="input_nat_settings"></a> [nat\_settings](#input\_nat\_settings) | (Optional) NAT Gateway settings, supports public and private connectivity types. Default: {} | <pre>object({<br/>    nat_count         = optional(number, -1)<br/>    connectivity_type = optional(string, "public")<br/>    configurations = optional(list(object({<br/>      name_prefix                = optional(string, "nat")<br/>      subnet_id                  = optional(string, null)<br/>      private_ip                 = optional(string, null)<br/>      allocation_id              = optional(string, null)<br/>      secondary_allocation_ids   = optional(list(string), null)<br/>      secondary_private_ips      = optional(list(string), null)<br/>      secondary_private_ip_count = optional(number, null)<br/>    })), [])<br/>    subnet_ids     = optional(list(string), [])<br/>    private_ips    = optional(list(string), [])<br/>    allocation_ids = optional(list(string), [])<br/>  })</pre> | `{}` | no |
 | <a name="input_org"></a> [org](#input\_org) | Organization details | <pre>object({<br/>    organization_name = string<br/>    organization_unit = string<br/>    environment_type  = string<br/>    environment_name  = string<br/>  })</pre> | n/a | yes |
 | <a name="input_spoke_def"></a> [spoke\_def](#input\_spoke\_def) | Spoke ID Number, must be a 3 digit number | `string` | `"001"` | no |
 
@@ -268,8 +487,12 @@ Available targets:
 
 | Name | Description |
 |------|-------------|
-| <a name="output_nat_gateway_private"></a> [nat\_gateway\_private](#output\_nat\_gateway\_private) | n/a |
-| <a name="output_nat_gateway_public"></a> [nat\_gateway\_public](#output\_nat\_gateway\_public) | n/a |
+| <a name="output_nat_gateway_ids"></a> [nat\_gateway\_ids](#output\_nat\_gateway\_ids) | List of the IDs of all NAT Gateways created by this module, regardless of connectivity type. |
+| <a name="output_nat_gateway_network_interface_ids"></a> [nat\_gateway\_network\_interface\_ids](#output\_nat\_gateway\_network\_interface\_ids) | List of the ENI IDs attached to all NAT Gateways created by this module, useful for flow log and security tooling lookups. |
+| <a name="output_nat_gateway_private"></a> [nat\_gateway\_private](#output\_nat\_gateway\_private) | Map of the created private NAT Gateways keyed by gateway ID, each entry holding its id, subnet\_id, private\_ip, network\_interface\_id and Name tag. Null when connectivity\_type is not "private". |
+| <a name="output_nat_gateway_private_ips"></a> [nat\_gateway\_private\_ips](#output\_nat\_gateway\_private\_ips) | List of the primary private IPv4 addresses of all NAT Gateways created by this module. |
+| <a name="output_nat_gateway_public"></a> [nat\_gateway\_public](#output\_nat\_gateway\_public) | Map of the created public NAT Gateways keyed by gateway ID, each entry holding its id, allocation\_id, subnet\_id, private\_ip, network\_interface\_id and Name tag. Null when connectivity\_type is not "public". |
+| <a name="output_nat_gateway_public_ips"></a> [nat\_gateway\_public\_ips](#output\_nat\_gateway\_public\_ips) | List of the public IPv4 addresses of the public NAT Gateways, empty when connectivity\_type is "private". |
 
 
 

@@ -1,18 +1,67 @@
 # Module configuration
-# Required variables
-{{- range .requiredVariables }}
-{{- if ne .Name "org"}}
-# Description {{ .Description }} , Type: {{ .Type }}
-{{ .Name }}: {{ .DefaultValuePlaceholder }}
-{{- end }}
+#
+# NAT Gateway settings for this deployment.
+# The generated terragrunt.hcl reads this file as local.local_vars and maps the
+# nat_settings key below into the module input of the same name.
+# The key may also be named "settings" — when both are present, "settings" wins.
+#
+# NOTE: when the VPC dependency is enabled during scaffolding, subnet_ids is
+#       overridden with the subnets exported by the VPC module (private, intra or
+#       database, as chosen at scaffold time). In that case use nat_count to pick
+#       how many of those subnets get a NAT Gateway, and leave subnet_ids unset.
+#
+# WARNING: public NAT Gateways must live in PUBLIC subnets. The scaffold prompt
+#          vpc_subnet_type defaults to "private", which suits connectivity_type
+#          "private" only. For public gateways either answer the prompt with a
+#          public subnet output, disable the VPC dependency and set subnet_ids
+#          explicitly below, or edit the generated terragrunt.hcl. A public
+#          gateway placed in a private subnet applies cleanly but never reaches
+#          the internet.
+#
+# NOTE: subnet_ids, allocation_ids, private_ips and configurations are index
+#       aligned — entry 0 of each describes the same gateway. Gateways are
+#       count-based, so inserting or reordering an entry re-creates every gateway
+#       from that index onwards. Append new entries at the end of the lists.
+nat_settings: # (Optional) NAT Gateway settings. Default: {} — no NAT Gateway is created.
+  nat_count: -1 # (Optional) Number of NAT Gateways to create. Default: -1
+  #               When <= 0 the count is derived from the length of allocation_ids
+  #               (connectivity_type "public") or subnet_ids (connectivity_type "private").
+  #               When > 0 it wins over the list lengths, so it must not exceed them.
+  #               Typical value is one gateway per availability zone.
+  connectivity_type: "public" # (Optional) NAT Gateway connectivity type. Values: "public" | "private". Default: "public"
+  #                             "public"  -> internet egress, requires one Elastic IP allocation per gateway.
+  #                             "private" -> VPC-to-VPC / on-premises egress, no Elastic IP is used.
+  #                             Changing this on an existing deployment destroys and re-creates every gateway.
 
-{{- end }}
-# Optional variables
-{{- range .optionalVariables }}
-{{- if ne .Name "is_hub" "spoke_def" "extra_args" }}
-# Description {{ .Description }} , Type: {{ .Type }}
-#{{ .Name }}: {{ .DefaultValue }}
-{{- end }}
+  # subnet_ids: [] # (Optional) Subnet IDs, one per NAT Gateway, indexed in order. Default: []
+  #   - "subnet-0123456789abcdef0"   #  Takes precedence over configurations[*].subnet_id.
+  #   - "subnet-0123456789abcdef1"   #  Leave unset when the VPC dependency is enabled (see NOTE above).
+  #                                  #  Public gateways must be placed in public subnets (see WARNING above).
 
-{{- end }}
+  # allocation_ids: [] # (Optional) Elastic IP allocation IDs, one per NAT Gateway, indexed in order. Default: []
+  #   - "eipalloc-0123456789abcdef0" #  Required for connectivity_type "public", ignored for "private".
+  #   - "eipalloc-0123456789abcdef1" #  Takes precedence over configurations[*].allocation_id.
 
+  # private_ips: [] # (Optional) Primary private IPv4 address, one per NAT Gateway, indexed in order. Default: []
+  #   - "10.0.1.100"                 #  Must belong to the CIDR of the subnet at the same index.
+  #   - "10.0.2.100"                 #  Takes precedence over configurations[*].private_ip.
+  #                                  #  When omitted AWS assigns an address automatically.
+
+  # configurations: [] # (Optional) Per-gateway configuration, indexed in the same order as the lists above. Default: []
+  #                    #            Use it when gateways need distinct names or secondary addresses.
+  #   - name_prefix: "nat"                          # (Optional) Prefix of the gateway Name tag, rendered as
+  #                                                 #            "<name_prefix>-<system_name>-<connectivity_type>". Default: "nat"
+  #     subnet_id: "subnet-0123456789abcdef0"       # (Optional) Subnet the gateway is placed in. Default: null
+  #                                                 #            Ignored when subnet_ids has a value at the same index.
+  #     allocation_id: "eipalloc-0123456789abcdef0" # (Optional) Elastic IP allocation ID, public gateways only. Default: null
+  #                                                 #            Ignored when allocation_ids has a value at the same index.
+  #     private_ip: "10.0.1.100"                    # (Optional) Primary private IPv4 address. Default: null
+  #                                                 #            Ignored when private_ips has a value at the same index.
+  #     secondary_allocation_ids:                   # (Optional) Additional Elastic IP allocations, public gateways only. Default: null
+  #       - "eipalloc-0123456789abcdef1"
+  #     secondary_private_ips:                      # (Optional) Additional private IPv4 addresses. Default: null
+  #       - "10.0.1.101"                            #            Conflicts with secondary_private_ip_count.
+  #       - "10.0.1.102"
+  #     secondary_private_ip_count: 2               # (Optional) Number of secondary private IPv4 addresses AWS allocates
+  #                                                 #            automatically. Private gateways only, conflicts with
+  #                                                 #            secondary_private_ips. Default: null
