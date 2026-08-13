@@ -9,19 +9,34 @@
 #       overridden with the subnets exported by the VPC module (private, intra or
 #       database, as chosen at scaffold time). In that case use nat_count to pick
 #       how many of those subnets get a NAT Gateway, and leave subnet_ids unset.
+#
+# WARNING: public NAT Gateways must live in PUBLIC subnets. The scaffold prompt
+#          vpc_subnet_type defaults to "private", which suits connectivity_type
+#          "private" only. For public gateways either answer the prompt with a
+#          public subnet output, disable the VPC dependency and set subnet_ids
+#          explicitly below, or edit the generated terragrunt.hcl. A public
+#          gateway placed in a private subnet applies cleanly but never reaches
+#          the internet.
+#
+# NOTE: subnet_ids, allocation_ids, private_ips and configurations are index
+#       aligned — entry 0 of each describes the same gateway. Gateways are
+#       count-based, so inserting or reordering an entry re-creates every gateway
+#       from that index onwards. Append new entries at the end of the lists.
 nat_settings: # (Optional) NAT Gateway settings. Default: {} — no NAT Gateway is created.
   nat_count: -1 # (Optional) Number of NAT Gateways to create. Default: -1
   #               When <= 0 the count is derived from the length of allocation_ids
   #               (connectivity_type "public") or subnet_ids (connectivity_type "private").
+  #               When > 0 it wins over the list lengths, so it must not exceed them.
   #               Typical value is one gateway per availability zone.
   connectivity_type: "public" # (Optional) NAT Gateway connectivity type. Values: "public" | "private". Default: "public"
   #                             "public"  -> internet egress, requires one Elastic IP allocation per gateway.
   #                             "private" -> VPC-to-VPC / on-premises egress, no Elastic IP is used.
+  #                             Changing this on an existing deployment destroys and re-creates every gateway.
 
   # subnet_ids: [] # (Optional) Subnet IDs, one per NAT Gateway, indexed in order. Default: []
   #   - "subnet-0123456789abcdef0"   #  Takes precedence over configurations[*].subnet_id.
   #   - "subnet-0123456789abcdef1"   #  Leave unset when the VPC dependency is enabled (see NOTE above).
-  #                                  #  Public gateways must be placed in public subnets.
+  #                                  #  Public gateways must be placed in public subnets (see WARNING above).
 
   # allocation_ids: [] # (Optional) Elastic IP allocation IDs, one per NAT Gateway, indexed in order. Default: []
   #   - "eipalloc-0123456789abcdef0" #  Required for connectivity_type "public", ignored for "private".

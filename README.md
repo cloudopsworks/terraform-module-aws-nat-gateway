@@ -75,8 +75,30 @@ Key features:
 | `public`            | exactly `nat_count`        | `length(allocation_ids)`                 |
 | `private`           | exactly `nat_count`        | `length(subnet_ids)`                     |
 
+When `nat_count` is greater than zero it wins over the list lengths, so every list that the deployment
+supplies must hold at least that many entries.
+
+## Naming and tagging
+
 Gateways are named `<name_prefix>-<organization_unit>-<environment_name>-<environment_type>-<spoke>-<region>-<connectivity_type>`,
-with `name_prefix` defaulting to `nat`.
+with `name_prefix` defaulting to `nat` and `<region>` compressed to the CloudOps Works short form
+(`us-east-1` becomes `usea1`). A public gateway in the `devops` unit of the `prod` / `production`
+environment, spoke `001`, region `us-east-1` therefore ends up as:
+
+```text
+nat-devops-prod-production-001-usea1-public
+```
+
+The same tag set — the organization common tags merged with `extra_tags` — is applied twice: once on the
+gateway itself, and once on the gateway's elastic network interface through `aws_ec2_tag`. AWS does not
+propagate gateway tags to that ENI, so without the second pass the interface would show up untagged in
+flow logs, cost allocation and security tooling.
+
+## Index alignment
+
+`subnet_ids`, `allocation_ids`, `private_ips` and `configurations` are index aligned — entry `0` of each
+list describes the same gateway. The gateways are `count`-based resources, so inserting or reordering an
+entry re-creates every gateway from that index onwards. Append new entries at the end of the lists.
 
 ## Usage
 
@@ -115,7 +137,17 @@ Scaffold prompts for the following answers:
 | `vpc_dependency_path`    | string | `../vpc`   | Relative path to the VPC deployment directory.                                |
 | `vpc_subnet_type`        | enum   | `private`  | Which VPC subnet output feeds `subnet_ids`: `private`, `intra` or `database`. |
 
+> **Public gateways need public subnets.** `vpc_subnet_type` defaults to `private`, which matches
+> `connectivity_type: "private"` only. A public NAT Gateway placed in a private subnet applies without
+> error but never reaches the internet, because the subnet has no route to an Internet Gateway. For a
+> public deployment, point the dependency at the VPC public subnet output, or answer
+> `vpc_dependency_enabled` with `false` and set `subnet_ids` explicitly in `inputs.yaml`.
+
 ## Generated `inputs.yaml`
+
+The scaffold copies `.boilerplate/inputs.yaml`, where every key is present and commented. Below it is
+shown filled in for a three-gateway public deployment — `nat_settings` may also be named `settings`, and
+`settings` wins when both are present:
 
 ```yaml
 # Module configuration
@@ -123,6 +155,7 @@ nat_settings: # (Optional) NAT Gateway settings. Default: {} — no NAT Gateway 
   nat_count: 3 # (Optional) Number of NAT Gateways to create. Default: -1
   #              When <= 0 the count is derived from the length of allocation_ids
   #              (connectivity_type "public") or subnet_ids (connectivity_type "private").
+  #              When > 0 it must not exceed the length of those lists.
   connectivity_type: "public" # (Optional) Values: "public" | "private". Default: "public"
   #                             "public"  -> internet egress, requires one Elastic IP allocation per gateway.
   #                             "private" -> VPC-to-VPC / on-premises egress, no Elastic IP is used.
@@ -133,6 +166,7 @@ nat_settings: # (Optional) NAT Gateway settings. Default: {} — no NAT Gateway 
   # subnet_ids: [] # (Optional) Subnet IDs, one per NAT Gateway, indexed in order. Default: []
   #                #            Leave unset when the VPC dependency is enabled — the generated
   #                #            terragrunt.hcl overrides it with the VPC module subnets.
+  #                #            Public gateways require public subnets.
   # private_ips: [] # (Optional) Primary private IPv4 address, one per NAT Gateway. Default: []
   # configurations: [] # (Optional) Per-gateway configuration, indexed as the lists above. Default: []
   #   - name_prefix: "nat"                          # (Optional) Name tag prefix. Default: "nat"
@@ -221,8 +255,10 @@ When the VPC dependency is disabled at scaffold time, the `dependency "vpc"` blo
    terragrunt scaffold github.com/cloudopsworks/terraform-module-aws-nat-gateway
    ```
 
-   Answer the prompts — accepting the defaults wires the VPC dependency at `../vpc` and feeds the
-   private subnets into `subnet_ids`.
+   Answer the prompts. Accepting the defaults wires the VPC dependency at `../vpc` and feeds the
+   **private** subnets into `subnet_ids`, which is what a private gateway wants. The public deployment
+   below needs public subnets instead, so either point `vpc_subnet_type` at the VPC public subnet output
+   or answer `vpc_dependency_enabled` with `false` and list `subnet_ids` yourself.
 
 3. Fill in `inputs.yaml`:
 
@@ -244,7 +280,9 @@ When the VPC dependency is disabled at scaffold time, the `dependency "vpc"` blo
    terragrunt apply
    ```
 
-5. Point the private route tables at the new gateways using the `nat_gateway_ids` output.
+5. Point the private route tables at the new gateways using the `nat_gateway_ids` output, keeping the
+   index alignment — `nat_gateway_ids[0]` is the gateway built from the first subnet in the list, so an
+   availability zone routes to the gateway that shares its index.
 
 
 ## Examples
@@ -253,8 +291,8 @@ All examples below are the `nat_settings` block of `inputs.yaml`.
 
 ### 1. One public NAT Gateway per availability zone
 
-Three Elastic IPs, three subnets taken from the VPC dependency. `nat_count` is omitted, so the count
-comes from `allocation_ids`.
+Three Elastic IPs, three subnets taken from the VPC dependency — which must be pointed at the VPC public
+subnet output for a public gateway. `nat_count` is omitted, so the count comes from `allocation_ids`.
 
 ```yaml
 nat_settings:
@@ -337,7 +375,32 @@ nat_settings:
 
 ### Consuming the outputs
 
-Route tables and other downstream deployments reference the gateways through a Terragrunt dependency:
+| Output                              | Shape                     | Notes                                                                                   |
+|-------------------------------------|---------------------------|-----------------------------------------------------------------------------------------|
+| `nat_gateway_ids`                   | `list(string)`            | Every gateway of either type, in creation order. The list to feed route tables.           |
+| `nat_gateway_public_ips`            | `list(string)`            | Elastic IPs of the public gateways. Empty for `connectivity_type: "private"`.             |
+| `nat_gateway_private_ips`           | `list(string)`            | Primary private address of every gateway, both types.                                     |
+| `nat_gateway_network_interface_ids` | `list(string)`            | ENI of every gateway, for flow log and security tooling lookups.                          |
+| `nat_gateway_public`                | `map(object)` or `null`   | Keyed by gateway ID. **`null`** unless `connectivity_type` is `"public"`.                 |
+| `nat_gateway_private`               | `map(object)` or `null`   | Keyed by gateway ID. **`null`** unless `connectivity_type` is `"private"`.                |
+
+The two map outputs carry `id`, `subnet_id`, `private_ip`, `network_interface_id` and `name` per entry,
+plus `allocation_id` on `nat_gateway_public`. They are `null` — not an empty map — for the connectivity
+type that was not deployed, so a consumer that may be pointed at either kind must guard the lookup:
+
+```hcl
+locals {
+  gateways = coalesce(
+    dependency.nat.outputs.nat_gateway_public,
+    dependency.nat.outputs.nat_gateway_private,
+    {},
+  )
+}
+```
+
+Route tables and other downstream deployments reference the gateways through a Terragrunt dependency.
+The list outputs are index aligned with the `nat_settings` lists, so `nat_gateway_ids[0]` is the gateway
+built from `subnet_ids[0]`:
 
 ```hcl
 dependency "nat" {
@@ -349,6 +412,23 @@ inputs = {
   egress_ips      = dependency.nat.outputs.nat_gateway_public_ips
 }
 ```
+
+### Operational notes
+
+- **Switching `connectivity_type` is destructive.** Public and private gateways are backed by separate
+  resources, so flipping the value destroys every existing gateway and creates a replacement set. Plan
+  the egress cutover before applying.
+- **List order is part of the state.** Gateways are `count`-based. Removing or reordering an entry in
+  `subnet_ids`, `allocation_ids`, `private_ips` or `configurations` shifts the indices and re-creates
+  every gateway from that point on. Append rather than insert.
+- **`nat_count` must not exceed the lists.** When it is greater than zero it overrides the derived count,
+  and a gateway whose index has neither a list entry nor a `configurations` entry fails at plan time.
+- **Elastic IPs are not managed here.** Allocate them in a separate deployment and pass the allocation
+  IDs in; destroying this module releases the association but leaves the allocations intact.
+- **Secondary addressing is type specific.** `secondary_allocation_ids` applies to public gateways only,
+  `secondary_private_ip_count` to private gateways only, and it conflicts with `secondary_private_ips`.
+- **ENI tags are a second resource.** Each gateway's tag set is re-applied to its network interface with
+  `aws_ec2_tag`, so a tag change produces plan entries for both the gateway and its ENI.
 
 
 
@@ -375,7 +455,7 @@ Available targets:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.35 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.59.0 |
 
 ## Modules
 
